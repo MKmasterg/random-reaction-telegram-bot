@@ -128,14 +128,3 @@ For webhook mode, publish the configured port and supply the webhook environment
 ```sh
 docker run --rm --env-file .env -p 8080:8080 random-reaction-telegram-bot
 ```
-
-## Troubleshooting
-
-- **Commands work, automatic replies do not:** disable Group Privacy Mode and re-add the bot, or make it an administrator.
-- **Telegram reports another `getUpdates` client:** only one polling process can use a token at a time. Stop the other process.
-- **A deployed webhook stopped receiving updates:** a polling process using the same token removed its webhook. Restart the webhook instance and use a separate development token.
-- **Webhook requests return `401`:** ensure `WEBHOOK_SECRET` exactly matches the secret registered by this process.
-- **Webhook registration fails:** check that `PUBLIC_BASE_URL` is a reachable HTTPS origin and does not already include `/telegram/webhook`.
-- **The bot repeats sooner after a restart:** cooldowns are intentionally in memory and are not persisted.
-
-Logs include update IDs, chat IDs, decisions, and errors. They never intentionally include the bot token or full message bodies.
