@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,18 +12,12 @@ import (
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/MKmasterg/random-reaction-telegram-bot/internal/application"
 	"github.com/MKmasterg/random-reaction-telegram-bot/internal/config"
-	"github.com/MKmasterg/random-reaction-telegram-bot/internal/content"
 	"github.com/MKmasterg/random-reaction-telegram-bot/internal/handler"
-	"github.com/MKmasterg/random-reaction-telegram-bot/internal/reaction"
 	telegramadapter "github.com/MKmasterg/random-reaction-telegram-bot/internal/telegram"
 	"github.com/MKmasterg/random-reaction-telegram-bot/internal/transport"
 )
-
-type productionRandom struct{}
-
-func (productionRandom) IntN(n int) int   { return rand.IntN(n) }
-func (productionRandom) Float64() float64 { return rand.Float64() }
 
 type appDispatcher struct {
 	handler *handler.Handler
@@ -47,43 +40,38 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
-	contentModel, err := content.LoadEmbedded()
-	if err != nil {
-		return fmt.Errorf("load embedded content: %w", err)
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	var application *handler.Handler
+	var runtime *application.Runtime
 	options := []tgbot.Option{
 		tgbot.WithDefaultHandler(func(ctx context.Context, _ *tgbot.Bot, update *models.Update) {
-			_ = application.Handle(ctx, telegramadapter.FromUpdate(update))
+			_ = runtime.Handler.Handle(ctx, telegramadapter.FromUpdate(update))
+		}),
+		tgbot.WithNotAsyncHandlers(),
+		tgbot.WithErrorsHandler(func(err error) {
+			logger.Error("telegram sdk", "error", err)
 		}),
 	}
-	client, err := tgbot.New(cfg.Token, options...)
+	runtime, err = application.New(cfg, logger, options...)
 	if err != nil {
-		return fmt.Errorf("initialize Telegram client: %w", err)
+		return err
 	}
-
-	random := productionRandom{}
-	generator := reaction.New(contentModel, random)
-	cooldowns := handler.NewCooldowns(cfg.GroupCooldown)
-	application = handler.New(telegramadapter.NewDelivery(client), generator, cooldowns, handler.Options{
-		Probability: cfg.ReplyProbability,
-		Random:      random,
-		Now:         time.Now,
-		Logger:      logger,
-	})
-	go cooldowns.RunCleanup(ctx, time.Now)
+	defer runtime.Close()
 
 	switch cfg.Transport {
 	case config.TransportPolling:
-		return transport.RunPolling(ctx, client, logger)
+		return transport.RunPolling(ctx, runtime.Bot, logger)
 	case config.TransportWebhook:
-		httpHandler := transport.NewHTTPHandler(cfg.WebhookSecret, appDispatcher{handler: application}, logger)
+		readyCtx, readyCancel := context.WithTimeout(ctx, time.Second)
+		readyErr := runtime.Ready(readyCtx)
+		readyCancel()
+		if readyErr != nil {
+			return fmt.Errorf("Redis readiness check: %w", readyErr)
+		}
+		httpHandler := transport.NewHTTPHandlerWithReadiness(cfg.WebhookSecret, appDispatcher{handler: runtime.Handler}, runtime.Ready, logger)
 		address := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-		return transport.RunWebhook(ctx, client, httpHandler, address, cfg.WebhookURL(), cfg.WebhookSecret, logger)
+		return transport.RunWebhook(ctx, runtime.Bot, httpHandler, address, cfg.WebhookURL(), cfg.WebhookSecret, logger)
 	default:
 		return fmt.Errorf("unsupported transport %q", cfg.Transport)
 	}

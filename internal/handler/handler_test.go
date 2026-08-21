@@ -65,6 +65,23 @@ type fakeClock struct{ current time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.current }
 
+type recordingReservation struct {
+	contextErr error
+}
+
+func (r *recordingReservation) Finish(ctx context.Context, _ time.Time, _ bool) error {
+	r.contextErr = ctx.Err()
+	return nil
+}
+
+type recordingCooldown struct {
+	reservation *recordingReservation
+}
+
+func (c *recordingCooldown) TryStart(context.Context, int64, int64, time.Time) (CooldownReservation, bool, error) {
+	return c.reservation, true, nil
+}
+
 func TestCommandsReplyToTriggeringMessage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -153,7 +170,8 @@ func TestUnsupportedUpdatesAreIgnored(t *testing.T) {
 func TestAutomaticProbabilityBoundary(t *testing.T) {
 	t.Run("equal skips", func(t *testing.T) {
 		sender := &fakeSender{}
-		h := newTestHandler(sender, &fakeGenerator{}, &floatSequence{values: []float64{0.5}}, &fakeClock{current: time.Unix(100, 0)}, 0.5)
+		h := newTestHandler(sender, &fakeGenerator{}, &floatSequence{}, &fakeClock{current: time.Unix(100, 0)}, 0.5)
+		h.probabilityScore = func(int64) float64 { return 0.5 }
 		h.Handle(context.Background(), groupUpdate(1, 1, "hello"))
 		if len(sender.replies) != 0 {
 			t.Fatalf("reply count = %d, want 0", len(sender.replies))
@@ -162,7 +180,7 @@ func TestAutomaticProbabilityBoundary(t *testing.T) {
 
 	t.Run("one always sends", func(t *testing.T) {
 		sender := &fakeSender{}
-		h := newTestHandler(sender, &fakeGenerator{general: "general"}, &floatSequence{values: []float64{0.999999, 0.1}}, &fakeClock{current: time.Unix(100, 0)}, 1)
+		h := newTestHandler(sender, &fakeGenerator{general: "general"}, &floatSequence{values: []float64{0.1}}, &fakeClock{current: time.Unix(100, 0)}, 1)
 		h.Handle(context.Background(), groupUpdate(1, 7, "hello"))
 		if len(sender.replies) != 1 || sender.replies[0].messageID != 7 {
 			t.Fatalf("replies = %+v, want reply to 7", sender.replies)
@@ -174,10 +192,9 @@ func TestAutomaticCooldownIsolationAndBranches(t *testing.T) {
 	sender := &fakeSender{}
 	generator := &fakeGenerator{general: "general", personal: "personal"}
 	random := &floatSequence{values: []float64{
-		0, 0.1, // group 10 sends general
-		0,      // group 10 passes probability but is cooling down
-		0, 0.1, // group 20 is isolated and sends general
-		0, 0.9, // group 10 sends personal after cooldown
+		0.1, // group 10 sends general
+		0.1, // group 20 is isolated and sends general
+		0.9, // group 10 sends personal after cooldown
 	}}
 	clock := &fakeClock{current: time.Unix(100, 0)}
 	h := newTestHandler(sender, generator, random, clock, 1)
@@ -210,7 +227,7 @@ func TestExplicitSendFailureIsReturned(t *testing.T) {
 
 func TestCooldownStartsOnlyAfterSuccessfulSend(t *testing.T) {
 	sender := &fakeSender{failNext: 1}
-	random := &floatSequence{values: []float64{0, 0.1, 0, 0.1}}
+	random := &floatSequence{values: []float64{0.1, 0.1}}
 	h := newTestHandler(sender, &fakeGenerator{general: "general"}, random, &fakeClock{current: time.Unix(100, 0)}, 1)
 
 	if err := h.Handle(context.Background(), groupUpdate(10, 1, "first")); err == nil {
@@ -227,7 +244,7 @@ func TestCooldownStartsOnlyAfterSuccessfulSend(t *testing.T) {
 
 func TestExplicitCommandBypassesCooldown(t *testing.T) {
 	sender := &fakeSender{}
-	h := newTestHandler(sender, &fakeGenerator{general: "general"}, &floatSequence{values: []float64{0, 0.1}}, &fakeClock{current: time.Unix(100, 0)}, 1)
+	h := newTestHandler(sender, &fakeGenerator{general: "general"}, &floatSequence{values: []float64{0.1}}, &fakeClock{current: time.Unix(100, 0)}, 1)
 
 	h.Handle(context.Background(), groupUpdate(10, 1, "ordinary"))
 	h.Handle(context.Background(), groupUpdate(10, 2, "/reaction"))
@@ -237,9 +254,71 @@ func TestExplicitCommandBypassesCooldown(t *testing.T) {
 	}
 }
 
+func TestCooldownFinalizationOutlivesRequestCancellation(t *testing.T) {
+	reservation := &recordingReservation{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := New(&fakeSender{}, &fakeGenerator{general: "general"}, &recordingCooldown{reservation: reservation}, Options{
+		Probability: 1,
+		Random:      &floatSequence{values: []float64{0.1}},
+		Now:         (&fakeClock{current: time.Unix(100, 0)}).Now,
+		Logger:      logger,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.Handle(ctx, groupUpdate(1, 1, "hello")); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if reservation.contextErr != nil {
+		t.Fatalf("Finish() context error = %v", reservation.contextErr)
+	}
+}
+
+func TestAutomaticRetryKeepsProbabilityDecision(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	h := newTestHandler(sender, &fakeGenerator{general: "general"}, &floatSequence{values: []float64{0.1, 0.1}}, &fakeClock{current: time.Unix(100, 0)}, 0.02)
+	var updateIDs []int64
+	h.probabilityScore = func(updateID int64) float64 {
+		updateIDs = append(updateIDs, updateID)
+		return 0.01
+	}
+	update := groupUpdate(10, 1, "hello")
+
+	if err := h.Handle(context.Background(), update); err == nil {
+		t.Fatal("failed automatic send returned nil error")
+	}
+	if err := h.Handle(context.Background(), update); err != nil {
+		t.Fatalf("automatic retry returned error: %v", err)
+	}
+	if len(updateIDs) != 2 || updateIDs[0] != update.ID || updateIDs[1] != update.ID {
+		t.Fatalf("probability update IDs = %v, want [%d %d]", updateIDs, update.ID, update.ID)
+	}
+	if len(sender.replies) != 1 {
+		t.Fatalf("replies = %+v, want one successful retry", sender.replies)
+	}
+}
+
+func TestDeterministicProbabilityScore(t *testing.T) {
+	first := deterministicProbabilityScore(42)
+	if first != deterministicProbabilityScore(42) {
+		t.Fatal("same update ID produced different probability scores")
+	}
+	seenBelow, seenAbove := false, false
+	for updateID := int64(1); updateID <= 100; updateID++ {
+		score := deterministicProbabilityScore(updateID)
+		if score < 0 || score >= 1 {
+			t.Fatalf("score for update %d = %f, want [0, 1)", updateID, score)
+		}
+		seenBelow = seenBelow || score < 0.5
+		seenAbove = seenAbove || score >= 0.5
+	}
+	if !seenBelow || !seenAbove {
+		t.Fatalf("scores did not cover both sides of 0.5: below=%v above=%v", seenBelow, seenAbove)
+	}
+}
+
 func newTestHandler(sender Sender, generator ReactionGenerator, random FloatRandom, clock *fakeClock, probability float64) *Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(sender, generator, NewCooldowns(5*time.Minute), Options{
+	return New(sender, generator, newMemoryCooldowns(5*time.Minute), Options{
 		Probability: probability,
 		Random:      random,
 		Now:         clock.Now,

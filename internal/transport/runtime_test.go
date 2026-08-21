@@ -15,12 +15,13 @@ import (
 type fakePollingBot struct {
 	deleted bool
 	started bool
+	reject  bool
 	err     error
 }
 
 func (b *fakePollingBot) DeleteWebhook(_ context.Context, _ *tgbot.DeleteWebhookParams) (bool, error) {
 	b.deleted = true
-	return b.err == nil, b.err
+	return !b.reject && b.err == nil, b.err
 }
 
 func (b *fakePollingBot) Start(_ context.Context) {
@@ -50,8 +51,19 @@ func TestRunPollingStopsWhenWebhookDeletionFails(t *testing.T) {
 	}
 }
 
+func TestRunPollingStopsWhenWebhookDeletionIsRejected(t *testing.T) {
+	client := &fakePollingBot{reject: true}
+	if err := RunPolling(context.Background(), client, discardLogger()); err == nil {
+		t.Fatal("RunPolling() error = nil")
+	}
+	if client.started {
+		t.Fatal("polling started after deletion rejection")
+	}
+}
+
 type failingWebhookBot struct {
 	params *tgbot.SetWebhookParams
+	err    error
 }
 
 type fakeListener struct {
@@ -72,11 +84,11 @@ func (a fakeAddress) String() string  { return string(a) }
 
 func (b *failingWebhookBot) SetWebhook(_ context.Context, params *tgbot.SetWebhookParams) (bool, error) {
 	b.params = params
-	return false, errors.New("registration failed")
+	return false, b.err
 }
 
 func TestRunWebhookRegistrationParameters(t *testing.T) {
-	client := &failingWebhookBot{}
+	client := &failingWebhookBot{err: errors.New("registration failed")}
 	listener := &fakeListener{}
 	err := runWebhook(
 		context.Background(),
@@ -102,6 +114,19 @@ func TestRunWebhookRegistrationParameters(t *testing.T) {
 	}
 	if !listener.closed {
 		t.Error("listener was not closed after registration failure")
+	}
+}
+
+func TestRunWebhookStopsWhenRegistrationIsRejected(t *testing.T) {
+	client := &failingWebhookBot{}
+	listener := &fakeListener{}
+	err := runWebhook(
+		context.Background(), client, http.NotFoundHandler(), "127.0.0.1:0",
+		"https://bot.example.test/api/webhook", "secret", discardLogger(),
+		func(_, _ string) (net.Listener, error) { return listener, nil },
+	)
+	if err == nil || !listener.closed {
+		t.Fatalf("runWebhook() error = %v, listener closed = %v", err, listener.closed)
 	}
 }
 

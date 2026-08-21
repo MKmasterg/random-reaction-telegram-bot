@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-telegram/bot/models"
 )
@@ -20,21 +21,42 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, update *models.Update) error
 }
 
-// NewHTTPHandler exposes the Telegram webhook and hosting health check.
+// NewHTTPHandler exposes the standalone server routes.
 func NewHTTPHandler(secret string, dispatcher Dispatcher, logger *slog.Logger) http.Handler {
-	deduper := newUpdateDeduper(dedupeCapacity)
+	return NewHTTPHandlerWithReadiness(secret, dispatcher, nil, logger)
+}
+
+func NewHTTPHandlerWithReadiness(secret string, dispatcher Dispatcher, readiness func(context.Context) error, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	health := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if readiness != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			if err := readiness(ctx); err != nil {
+				http.Error(w, "not ready", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok\n")
-	})
-	mux.HandleFunc("/telegram/webhook", func(w http.ResponseWriter, r *http.Request) {
+	}
+	mux.HandleFunc("/healthz", health)
+	mux.HandleFunc("/api/healthz", health)
+	webhook := NewWebhookHandler(secret, dispatcher, logger)
+	mux.Handle("/api/webhook", webhook)
+	mux.Handle("/telegram/webhook", webhook)
+	return mux
+}
+
+func NewWebhookHandler(secret string, dispatcher Dispatcher, logger *slog.Logger) http.Handler {
+	deduper := newUpdateDeduper(dedupeCapacity)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -94,7 +116,6 @@ func NewHTTPHandler(secret string, dispatcher Dispatcher, logger *slog.Logger) h
 		completed = true
 		w.WriteHeader(http.StatusOK)
 	})
-	return mux
 }
 
 type updateDeduper struct {

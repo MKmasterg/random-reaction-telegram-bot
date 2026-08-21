@@ -10,6 +10,16 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8.10.0-alpine3.23
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 1s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,12 +27,16 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Verify formatting
-        run: test -z "$(gofmt -l cmd internal)"
+        run: test -z "$(gofmt -l api cmd internal)"
       - name: Vet
         run: go vet ./...
       - name: Test with race detector
         run: go test -race ./...
+      - name: Test Redis contract
+        env:
+          REDIS_TEST_URL: redis://localhost:6379
+        run: go test -run TestRedisCooldownIntegration ./internal/redisstore
       - name: Compile
-        run: go build ./cmd/bot
+        run: go build ./cmd/bot ./cmd/register-webhook ./api/...
       - name: Build container image
         run: docker build -t random-reaction-telegram-bot .

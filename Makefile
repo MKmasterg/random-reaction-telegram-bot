@@ -1,6 +1,6 @@
 BINARY := bin/random-reaction-telegram-bot
 
-.PHONY: build run fmt fmt-check vet test test-race check docker-build
+.PHONY: build run register-webhook redis-up fmt fmt-check vet test test-integration test-race check docker-build
 
 build:
 	mkdir -p bin
@@ -9,17 +9,26 @@ build:
 run:
 	go run ./cmd/bot
 
+register-webhook:
+	go run ./cmd/register-webhook
+
+redis-up:
+	docker compose up -d redis
+
 fmt:
-	gofmt -w cmd internal
+	gofmt -w api cmd internal
 
 fmt-check:
-	test -z "$$(gofmt -l cmd internal)"
+	test -z "$$(gofmt -l api cmd internal)"
 
 vet:
 	go vet ./...
 
 test:
 	go test ./...
+
+test-integration:
+	REDIS_TEST_URL=redis://localhost:6379 go test -run TestRedisCooldownIntegration ./internal/redisstore
 
 test-race:
 	go test -race ./...
