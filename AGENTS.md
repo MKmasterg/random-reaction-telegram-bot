@@ -2,58 +2,52 @@
 
 ## Project intent
 
-This repository contains a stateless Telegram group bot written in Go 1.26. It provides explicit reaction commands and low-probability automatic replies with an in-memory per-group cooldown. Keep the implementation small, provider-neutral, and free of databases, analytics, media handling, and per-group configuration unless the task explicitly changes scope.
+This repository contains a Telegram group bot written in Go 1.26. It supports event-driven HTTP functions, standalone webhooks, and local polling. Every production mode uses the same Redis-backed group cooldown; do not add an in-memory production fallback.
 
-Do not add deployment-provider names, badges, manifests, or provider-specific setup instructions to tracked files.
+Function adapters belong under `api`. Keep them thin, keep domain packages and Redis state portable, and do not add deployment-provider manifests, badges, or provider-specific instructions to tracked files.
 
 ## Package boundaries
 
-- `cmd/bot`: dependency wiring, signals, and transport selection only.
+- `api`: thin event-driven HTTP function adapters.
+- `cmd/bot`: signals and standalone transport selection.
+- `cmd/register-webhook`: readiness-gated Telegram webhook registration.
+- `internal/application`: shared dependency wiring for every runtime.
 - `internal/config`: environment parsing and validation.
-- `internal/content`: embedded JSON schema, parsing, and startup validation.
+- `internal/content`: embedded JSON and validation.
 - `internal/domain`: Telegram-independent update types.
-- `internal/reaction`: random selection and display-name normalization.
-- `internal/handler`: commands, exclusions, probability, cooldown, and reply policy.
-- `internal/telegram`: Telegram SDK conversion and message delivery.
-- `internal/transport`: long-polling startup, webhook registration, HTTP validation, and graceful shutdown.
+- `internal/handler`: commands, exclusions, probability, cooldown policy, and small interfaces.
+- `internal/reaction`: content selection and display-name normalization.
+- `internal/redisstore`: namespaced atomic cooldown reservations.
+- `internal/telegram`: Telegram conversion and delivery.
+- `internal/transport`: polling, standalone HTTP, and webhook validation.
 
-Keep domain tests network-free by depending on the existing small interfaces. Protect shared webhook state against concurrent requests.
+Keep handler tests network-free. Test Redis scripts against a real isolated Redis service as well as unit fakes. Occasional duplicate webhook replies are accepted; durable update deduplication is out of scope.
 
 ## Content schema
 
-`internal/content/reactions.json` is UTF-8 and embedded into the binary. It contains:
+`internal/content/reactions.json` is UTF-8 and embedded into the binary. It requires nonempty `general_reactions`, nonempty `personal_groups`, `{name}` and `{action}` in every template, and nonempty actions. Keep content playful without slurs, protected-class targeting, explicit sexual material, or hostile personal attacks.
 
-- nonempty `general_reactions` strings;
-- nonempty `personal_groups`;
-- a `template` in each group containing both `{name}` and `{action}`;
-- nonempty `actions` strings in each group.
-
-Content should stay playful and may mix Persian and English. Do not add slurs, protected-class targeting, explicit sexual material, or genuinely hostile personal attacks.
-
-## Commands and behavior
+## Behavior
 
 - `/reaction`: general reaction.
 - `/personal`: personalized reaction.
-- `/start` and `/help`: usage and Group Privacy Mode explanation.
-- Known commands in private chats return only the explanation.
-- Commands bypass probability and cooldown.
+- `/start` and `/help`: usage and privacy explanation.
+- Commands bypass Redis, probability, and cooldown.
 - Automatic replies apply only to ordinary group and supergroup text messages.
-
-Use plain Telegram text. Never enable a parse mode for user-provided display names.
+- Use plain Telegram text without a parse mode.
 
 ## Required checks
-
-Run these before handing off changes:
 
 ```sh
 make fmt-check
 make vet
 make test-race
 make build
+make redis-up
+make test-integration
+make docker-build
 ```
-
-Run `docker build -t random-reaction-telegram-bot .` when Docker or build files change and the environment supports it.
 
 ## Secrets
 
-Never commit, print, or log bot tokens, webhook secrets, real public service URLs, `.env` contents, or secret-manager output. Keep examples obviously fake. Polling deletes the token's existing webhook, so use a separate development token when testing manually.
+Never commit, print, or log Telegram tokens, webhook secrets, Redis URLs, `.env` contents, or real production URLs. `REDIS_KEY_PREFIX` is not secret but must differ between environments. Polling deletes the token's existing webhook, so use a separate development bot.

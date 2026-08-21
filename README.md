@@ -1,141 +1,124 @@
 # Random Reaction Telegram Bot
 
-A small, stateless Go bot that occasionally replies to ordinary messages in Telegram groups. Reactions are selected from embedded Persian and English content, and explicit commands are always available.
-
-The bot supports local long polling and HTTPS webhooks. Per-group cooldowns and recent webhook update IDs live in memory and reset whenever the process restarts.
+A small Go bot that occasionally replies to ordinary Telegram group messages with mixed Persian and English reactions. It runs as event-driven HTTP functions, a standalone webhook server, or a local polling process. Every mode uses Redis for shared per-group cooldowns.
 
 ## Behavior
 
-- `/reaction` replies with a random general reaction.
-- `/personal` replies with a reaction using the sender's display name.
-- `/start` and `/help` explain the commands and Telegram privacy requirement.
-- Private chats only return the explanation for these known commands.
-- Ordinary group messages have a 2% reply chance by default, followed by a five-minute cooldown for that group.
-- Commands bypass both the random chance and the cooldown.
+- `/reaction` returns a random general reaction.
+- `/personal` includes the sender's display name.
+- `/start` and `/help` explain usage and Telegram privacy requirements.
+- Ordinary group messages have a 2% reply chance and a five-minute cooldown by default.
+- Commands bypass probability and cooldown.
 
-The bot ignores channels, service events, messages from bots, commands it does not recognize, media, and non-text updates. It sends plain text and does not enable a Telegram parse mode.
+The bot ignores channels, service events, bots, media, unsupported chats, and unknown commands. Replies are plain text without a parse mode.
 
-## Create and configure a Telegram bot
+Webhook processing is at least once: failed processing returns `503` so Telegram can retry. Automatic probability is stable for a given update, while update deduplication is process-local, so retries after timeouts or on another function instance can produce duplicate replies.
+
+## Telegram setup
 
 1. Open [@BotFather](https://t.me/BotFather) and run `/newbot`.
-2. Copy the token into `TELEGRAM_BOT_TOKEN`. Treat it like a password.
-3. For automatic replies, use `/setprivacy` in BotFather and choose **Disable** for this bot. Alternatively, make the bot a group administrator.
+2. Store the token as `TELEGRAM_BOT_TOKEN`.
+3. For automatic reactions, use `/setprivacy` and disable Group Privacy Mode, or make the bot a group administrator.
 4. Remove and re-add the bot to existing groups after changing privacy mode.
 
-Telegram's Group Privacy Mode prevents a normal group bot from receiving most ordinary messages. Commands can still work while automatic reactions appear broken if privacy mode remains enabled. See [Telegram's bot privacy documentation](https://core.telegram.org/bots/features#privacy-mode).
+Use a separate development bot token locally. Polling removes that token's existing webhook.
 
-Use a separate development bot token for local polling. Polling startup removes an existing webhook, so using a deployed bot's token locally will disconnect that deployment.
+## Configuration
 
-## Local setup
+| Variable | Required | Default | Description |
+|---|---:|---:|---|
+| `TELEGRAM_BOT_TOKEN` | Yes | — | BotFather token. |
+| `REDIS_URL` | Yes | — | `redis://` locally or `rediss://` for managed TLS Redis. May contain credentials; never log it. |
+| `REDIS_KEY_PREFIX` | Yes | — | Shared by replicas of one environment and different across development, preview, and production. |
+| `REPLY_PROBABILITY` | No | `0.02` | Number greater than `0` and at most `1`. |
+| `GROUP_COOLDOWN` | No | `5m` | Go duration of at least `1ms`. |
+| `BOT_TRANSPORT` | No | `polling` | Standalone mode: `polling` or `webhook`. |
+| `PORT` | No | `8080` | Standalone webhook listener port. |
+| `PUBLIC_BASE_URL` | Registration/standalone webhook | — | Public HTTPS origin without a path. |
+| `WEBHOOK_SECRET` | Webhook | — | 1–256 letters, digits, `_`, or `-`. |
 
-Requirements:
+Redis keys use `<REDIS_KEY_PREFIX>:cooldown:<chat_id>`. Do not share a prefix between development and production bots.
 
-- Go 1.26
-- A Telegram bot token
+## Local development
 
-Copy the environment template and add the development token:
+Requirements: Go 1.26, Docker, and a development bot token.
 
 ```sh
 cp .env.example .env
-```
-
-Load it in the current shell and run the bot:
-
-```sh
+docker compose up -d redis
 set -a
 source .env
 set +a
 make run
 ```
 
-Long polling is the default transport. Stop it with `Ctrl+C`; `SIGINT` and `SIGTERM` both trigger graceful shutdown.
+The default transport is polling. Redis is required for automatic reactions; explicit commands do not read Redis.
 
-## Configuration
+## Event-driven function deployment
 
-| Variable | Required | Default | Description |
-|---|---:|---:|---|
-| `TELEGRAM_BOT_TOKEN` | Yes | — | Secret token issued by BotFather. |
-| `BOT_TRANSPORT` | No | `polling` | `polling` or `webhook`. |
-| `REPLY_PROBABILITY` | No | `0.02` | Number greater than `0` and at most `1`. |
-| `GROUP_COOLDOWN` | No | `5m` | Positive [Go duration](https://pkg.go.dev/time#ParseDuration). |
-| `PORT` | No | `8080` | HTTP listener port in webhook mode. |
-| `PUBLIC_BASE_URL` | Webhook only | — | Public HTTPS origin, without the webhook path. |
-| `WEBHOOK_SECRET` | Webhook only | — | Shared secret using 1–256 letters, digits, `_`, or `-`. |
+The repository provides two HTTP function entry points:
 
-For webhook mode, the service binds to `0.0.0.0:$PORT`, accepts Telegram updates at `POST /telegram/webhook`, and exposes `GET /healthz`. At startup it registers `${PUBLIC_BASE_URL}/telegram/webhook` and requests message updates only. TLS is expected to terminate at the public HTTPS endpoint.
+- `api/webhook/index.go` handles Telegram updates at `/api/webhook`.
+- `api/healthz/index.go` reports configuration and Redis readiness at `/api/healthz`.
 
-Webhook processing uses at-least-once attempts. Successfully handled update IDs are retained in bounded memory; failed sends return HTTP `503` and release the ID so Telegram can retry it. A retry can produce a duplicate reply after an ambiguous timeout, and the retained IDs reset whenever the process restarts.
+Both export a standard `http.HandlerFunc`-compatible `Handler`. If a hosting platform uses a different function layout, keep the adapter thin and reuse `internal/application` and `internal/transport`.
 
-Example webhook settings:
+1. Provision a standard Redis service reachable from the functions. Prefer a TLS `rediss://` connection for remote Redis.
+2. Configure `TELEGRAM_BOT_TOKEN`, `REDIS_URL`, `REDIS_KEY_PREFIX`, and `WEBHOOK_SECRET` in the deployment environment.
+3. Deploy both function entry points.
+4. Verify `GET https://your-project.example/api/healthz` returns `200`.
+5. Register the stable public URL from a trusted machine:
 
-```dotenv
-BOT_TRANSPORT=webhook
-PUBLIC_BASE_URL=https://bot.example.com
-WEBHOOK_SECRET=replace-with-a-long-random-value
-PORT=8080
+```sh
+set -a
+source .env.production
+set +a
+BOT_TRANSPORT=webhook PUBLIC_BASE_URL=https://your-project.example make register-webhook
 ```
 
-Do not commit real values. `.env` and common secret file variants are ignored.
+Telegram sends updates to `POST /api/webhook`. The endpoint must be public, use HTTPS, and allow Telegram's webhook requests through any access-control layer. Do not register temporary deployment URLs.
 
-## Edit reactions
+The registrar validates configuration, pings Redis, calls the deployed `/api/healthz`, and checks Telegram's `SetWebhook` result before reporting success. A failed or protected deployment does not replace the active webhook.
 
-Reaction text lives in [`internal/content/reactions.json`](internal/content/reactions.json) and is embedded in the executable. Changes require a rebuild.
+## Standalone webhook and Docker
 
-The schema is:
+The standalone server exposes `POST /api/webhook`, the compatibility alias `POST /telegram/webhook`, and `GET /healthz`. It registers `/api/webhook` at startup.
 
-```json
-{
-  "general_reactions": ["..."],
-  "personal_groups": [
-    {
-      "template": "reaction for {name} when {action}",
-      "actions": ["..."]
-    }
-  ]
-}
+Run the full Compose stack with values from `.env`:
+
+```sh
+docker compose up --build bot
 ```
 
-Both lists and every action must be nonempty. Each personal template must contain `{name}` and `{action}`. Invalid content stops the bot during startup and is covered by tests.
+The image remains usable without Compose when `REDIS_URL` points to a reachable Redis service:
 
-## Build and verify
+```sh
+docker build -t random-reaction-telegram-bot .
+docker run --rm --env-file .env -p 8080:8080 random-reaction-telegram-bot
+```
+
+Compose publishes Redis and the bot only on loopback. The bot port is useful for local webhook testing; polling mode does not need inbound traffic.
+
+## Content and checks
+
+Reaction text lives in [`internal/content/reactions.json`](internal/content/reactions.json) and is embedded into the binary. Changes require a rebuild.
 
 ```sh
 make fmt-check
 make vet
-make test
 make test-race
 make build
+make redis-up
+make test-integration
+make docker-build
 ```
 
-`make check` runs formatting verification, vetting, and race-enabled tests. The compiled binary is written to `bin/random-reaction-telegram-bot`.
+## Failure behavior
 
-## Docker
+- Redis unavailable: automatic candidates fail closed; webhook requests return `503`, while explicit commands remain Redis-independent.
+- Telegram send failure: the Redis reservation is released and webhook delivery is retried.
+- Ambiguous timeout: a retry can duplicate a reply; exact-once delivery is out of scope.
+- Process restart: Redis cooldowns survive, while recent webhook update IDs do not.
+- Function runtime issue: deploy the same application through the standalone Docker webhook mode.
 
-Build the multi-stage, non-root image:
-
-```sh
-docker build -t random-reaction-telegram-bot .
-```
-
-Run it with long polling:
-
-```sh
-docker run --rm --env-file .env random-reaction-telegram-bot
-```
-
-For webhook mode, publish the configured port and supply the webhook environment values through the platform's secret manager:
-
-```sh
-docker run --rm --env-file .env -p 8080:8080 random-reaction-telegram-bot
-```
-
-## Troubleshooting
-
-- **Commands work, automatic replies do not:** disable Group Privacy Mode and re-add the bot, or make it an administrator.
-- **Telegram reports another `getUpdates` client:** only one polling process can use a token at a time. Stop the other process.
-- **A deployed webhook stopped receiving updates:** a polling process using the same token removed its webhook. Restart the webhook instance and use a separate development token.
-- **Webhook requests return `401`:** ensure `WEBHOOK_SECRET` exactly matches the secret registered by this process.
-- **Webhook registration fails:** check that `PUBLIC_BASE_URL` is a reachable HTTPS origin and does not already include `/telegram/webhook`.
-- **The bot repeats sooner after a restart:** cooldowns are intentionally in memory and are not persisted.
-
-Logs include update IDs, chat IDs, decisions, and errors. They never intentionally include the bot token or full message bodies.
+Logs include update IDs, chat IDs, decisions, and errors. They do not intentionally include tokens, Redis URLs, or message bodies.
