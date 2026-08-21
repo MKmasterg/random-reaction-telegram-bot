@@ -26,6 +26,11 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
+
+# Local builds
+/bin/
 
 # Editor/IDE
 # .idea/
