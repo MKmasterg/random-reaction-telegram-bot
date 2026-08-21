@@ -61,7 +61,7 @@ The repository provides two HTTP function entry points:
 - `api/webhook/index.go` handles Telegram updates at `/api/webhook`.
 - `api/healthz/index.go` reports configuration and Redis readiness at `/api/healthz`.
 
-Both export a standard `http.HandlerFunc`-compatible `Handler`. If a hosting platform uses a different function layout, keep the adapter thin and reuse `internal/application` and `internal/transport`.
+Both export a standard `http.HandlerFunc`-compatible `Handler`. They delegate through the public `functions` bridge so generated runtime wrappers do not import Go `internal` packages directly. If a hosting platform uses a different function layout, keep the adapter thin and reuse the same bridge.
 
 1. Provision a standard Redis service reachable from the functions. Prefer a TLS `rediss://` connection for remote Redis.
 2. Configure `TELEGRAM_BOT_TOKEN`, `REDIS_URL`, `REDIS_KEY_PREFIX`, and `WEBHOOK_SECRET` in the deployment environment.
