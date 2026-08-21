@@ -9,12 +9,13 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/MKmasterg/random-reaction-telegram-bot/internal/domain"
 	"github.com/MKmasterg/random-reaction-telegram-bot/internal/reaction"
 )
 
-const UsageText = "I occasionally add a random Persian or English reaction in group chats.\n\n/reaction — get a random reaction\n/personal — get a reaction using your display name\n/start or /help — show this message\n\nFor automatic replies, disable Group Privacy Mode in BotFather or make me a group administrator."
+const UsageText = "I occasionally add a random Persian or English reaction in group chats.\n\n/reaction — get a random reaction\n/personal — get a reaction using your display name\nSay reaction or واکنش in a group — get a personal reaction\n/start or /help — show this message\n\nFor automatic replies, disable Group Privacy Mode in BotFather or make me a group administrator."
 
 type Sender interface {
 	SendReply(ctx context.Context, chatID int64, replyToMessageID int, text string) error
@@ -128,6 +129,11 @@ func (h *Handler) Handle(ctx context.Context, update domain.Update) error {
 		return nil
 	}
 
+	if containsReactionKeyword(message.Text) {
+		name := reaction.DisplayName(message.From)
+		return h.sendExplicit(ctx, update.ID, message, h.generator.Personal(name), "keyword_personal")
+	}
+
 	if h.probabilityScore(update.ID) >= h.probability {
 		h.logDecision(update.ID, message.ChatID, "automatic_probability_skip")
 		return nil
@@ -166,6 +172,18 @@ func (h *Handler) Handle(ctx context.Context, update domain.Update) error {
 	}
 	h.logDecision(update.ID, message.ChatID, "automatic_sent")
 	return nil
+}
+
+func containsReactionKeyword(text string) bool {
+	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && !unicode.IsMark(r) && !unicode.Is(unicode.Cf, r) && r != '_'
+	})
+	for _, word := range words {
+		if word == "reaction" || word == "واکنش" {
+			return true
+		}
+	}
+	return false
 }
 
 func deterministicProbabilityScore(updateID int64) float64 {

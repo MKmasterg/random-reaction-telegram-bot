@@ -6,9 +6,10 @@ A small Go bot that occasionally replies to ordinary Telegram group messages wit
 
 - `/reaction` returns a random general reaction.
 - `/personal` includes the sender's display name.
+- Saying `reaction` or `واکنش` as a whole word in a group triggers a personal reaction.
 - `/start` and `/help` explain usage and Telegram privacy requirements.
 - Ordinary group messages have a 2% reply chance and a five-minute cooldown by default.
-- Commands bypass probability and cooldown.
+- Commands and keyword triggers bypass probability and cooldown.
 
 The bot ignores channels, service events, bots, media, unsupported chats, and unknown commands. Replies are plain text without a parse mode.
 
@@ -101,7 +102,7 @@ Compose publishes Redis and the bot only on loopback. The bot port is useful for
 
 ## Content and checks
 
-Reaction text lives in [`internal/content/reactions.json`](internal/content/reactions.json) and is embedded into the binary. Changes require a rebuild.
+Reaction text lives in [`internal/content/reactions.json`](internal/content/reactions.json) and is embedded into the binary. Personal templates always require `{name}`; `{action}` and its nonempty `actions` list are optional but must be used together. Changes require a rebuild.
 
 ```sh
 make fmt-check

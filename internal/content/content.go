@@ -15,10 +15,10 @@ type Model struct {
 	PersonalGroups   []PersonalGroup `json:"personal_groups"`
 }
 
-// PersonalGroup combines a localized template with compatible actions.
+// PersonalGroup combines a localized template with optional compatible actions.
 type PersonalGroup struct {
 	Template string   `json:"template"`
-	Actions  []string `json:"actions"`
+	Actions  []string `json:"actions,omitempty"`
 }
 
 //go:embed reactions.json
@@ -61,11 +61,12 @@ func Validate(model Model) error {
 		if !strings.Contains(group.Template, "{name}") {
 			return fmt.Errorf("personal_groups[%d].template must contain {name}", i)
 		}
-		if !strings.Contains(group.Template, "{action}") {
-			return fmt.Errorf("personal_groups[%d].template must contain {action}", i)
-		}
-		if len(group.Actions) == 0 {
+		hasAction := strings.Contains(group.Template, "{action}")
+		if hasAction && len(group.Actions) == 0 {
 			return fmt.Errorf("personal_groups[%d].actions must not be empty", i)
+		}
+		if !hasAction && len(group.Actions) != 0 {
+			return fmt.Errorf("personal_groups[%d].template must contain {action} when actions are provided", i)
 		}
 		for j, action := range group.Actions {
 			if strings.TrimSpace(action) == "" {

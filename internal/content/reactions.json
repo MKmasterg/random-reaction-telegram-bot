@@ -15,7 +15,8 @@
     "This has strong ‘trust me bro’ energy.",
     "Chat, is this canon now?",
     "Peak cinema. Zero notes. 🎬",
-    "A side quest has appeared. Nobody asked for it."
+    "A side quest has appeared. Nobody asked for it.",
+    "واکنش امام زمان:"
   ],
   "personal_groups": [
     {
@@ -36,21 +37,18 @@
       ]
     },
     {
-      "template": "{name} when {action}:",
+      "template": "واکنش بابای {name} سر {action}:",
       "actions": [
-        "the Wi-Fi has one bar but confidence is at 100%",
-        "the meeting that could have been a message enters hour two",
-        "they say one more video for the fourth time",
-        "the last snack disappears under mysterious circumstances",
-        "an ancient meme becomes relevant again",
-        "the group chat unlocks a completely unnecessary side quest",
-        "they hear their own voice note played back",
-        "two percent battery somehow feels like plenty",
-        "the glasses they were looking for are already on their face",
-        "one quick search grants instant expert status",
-        "the typing indicator vanishes after five dramatic minutes",
-        "the plan had one step and still developed lore"
+        "صبح",
+        "ظهر",
+        "عصر",
+        "شب",
+        "سر ناهار",
+        "سر شام"
       ]
+    },
+    {
+      "template": "ها واکنش {name}:"
     }
   ]
 }

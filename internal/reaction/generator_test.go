@@ -24,24 +24,35 @@ func (s *intSequence) IntN(n int) int {
 }
 
 func TestGeneratorSelectsEveryContentBranch(t *testing.T) {
-	model, err := content.LoadEmbedded()
-	if err != nil {
-		t.Fatal(err)
+	model := content.Model{
+		GeneralReactions: []string{"general zero", "general one"},
+		PersonalGroups: []content.PersonalGroup{
+			{Template: "{name} when {action}", Actions: []string{"first", "second"}},
+			{Template: "reaction {name}:"},
+		},
 	}
-	random := &intSequence{values: []int{0, 8, 0, 0, 1, 11}}
+	random := &intSequence{values: []int{0, 1, 0, 1, 1}}
 	generator := New(model, random)
 
-	if got := generator.General(); !strings.Contains(got, "مغزم") {
-		t.Errorf("Persian General() = %q", got)
+	if got := generator.General(); got != "general zero" {
+		t.Errorf("first General() = %q", got)
 	}
-	if got := generator.General(); !strings.Contains(got, "brain cell") {
-		t.Errorf("English General() = %q", got)
+	if got := generator.General(); got != "general one" {
+		t.Errorf("second General() = %q", got)
 	}
-	if got := generator.Personal("نیما"); strings.Contains(got, "{name}") || strings.Contains(got, "{action}") || !strings.Contains(got, "نیما") {
-		t.Errorf("Persian Personal() = %q", got)
+	if got := generator.Personal("Sam"); got != "Sam when second" {
+		t.Errorf("action Personal() = %q", got)
 	}
-	if got := generator.Personal("Sam"); strings.Contains(got, "{name}") || strings.Contains(got, "{action}") || !strings.Contains(got, "Sam when") {
-		t.Errorf("English Personal() = %q", got)
+	if got := generator.Personal("مریم"); got != "reaction مریم:" {
+		t.Errorf("name-only Personal() = %q", got)
+	}
+}
+
+func TestPersonalWithoutAction(t *testing.T) {
+	model := content.Model{PersonalGroups: []content.PersonalGroup{{Template: "reaction {name}:"}}}
+	generator := New(model, &intSequence{values: []int{0}})
+	if got := generator.Personal("A\nB"); got != "reaction A B:" {
+		t.Errorf("Personal() = %q", got)
 	}
 }
 
