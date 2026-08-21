@@ -188,6 +188,71 @@ func TestAutomaticProbabilityBoundary(t *testing.T) {
 	})
 }
 
+func TestReactionKeywordsTriggerPersonalReply(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		trigger bool
+	}{
+		{name: "English", text: "give me a REACTION!", trigger: true},
+		{name: "Persian", text: "این واکنش چیه؟", trigger: true},
+		{name: "English substring", text: "reactionary", trigger: false},
+		{name: "Persian suffix", text: "واکنش‌ها", trigger: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sender := &fakeSender{}
+			generator := &fakeGenerator{personal: "personal"}
+			h := newTestHandler(sender, generator, &floatSequence{}, &fakeClock{current: time.Unix(100, 0)}, 0.02)
+			h.probabilityScore = func(int64) float64 { return 1 }
+
+			if err := h.Handle(context.Background(), groupUpdate(10, 7, test.text)); err != nil {
+				t.Fatalf("Handle() error = %v", err)
+			}
+			if test.trigger {
+				if len(sender.replies) != 1 || sender.replies[0].text != "personal" || sender.replies[0].messageID != 7 {
+					t.Fatalf("replies = %+v, want personal reply to 7", sender.replies)
+				}
+				if len(generator.personalNames) != 1 || generator.personalNames[0] != "Test User" {
+					t.Fatalf("personal names = %v", generator.personalNames)
+				}
+			} else if len(sender.replies) != 0 {
+				t.Fatalf("replies = %+v, want none", sender.replies)
+			}
+		})
+	}
+}
+
+func TestReactionKeywordBypassesCooldown(t *testing.T) {
+	sender := &fakeSender{}
+	generator := &fakeGenerator{general: "general", personal: "personal"}
+	h := newTestHandler(sender, generator, &floatSequence{values: []float64{0.1}}, &fakeClock{current: time.Unix(100, 0)}, 1)
+
+	if err := h.Handle(context.Background(), groupUpdate(10, 1, "ordinary")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Handle(context.Background(), groupUpdate(10, 2, "reaction")); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.replies) != 2 || sender.replies[1].text != "personal" {
+		t.Fatalf("replies = %+v, want keyword reply during cooldown", sender.replies)
+	}
+}
+
+func TestPrivateReactionKeywordIsIgnored(t *testing.T) {
+	sender := &fakeSender{}
+	h := newTestHandler(sender, &fakeGenerator{personal: "personal"}, &floatSequence{}, &fakeClock{current: time.Unix(100, 0)}, 1)
+	update := groupUpdate(10, 1, "reaction")
+	update.Message.ChatType = "private"
+
+	if err := h.Handle(context.Background(), update); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.replies) != 0 {
+		t.Fatalf("replies = %+v, want none", sender.replies)
+	}
+}
+
 func TestAutomaticCooldownIsolationAndBranches(t *testing.T) {
 	sender := &fakeSender{}
 	generator := &fakeGenerator{general: "general", personal: "personal"}

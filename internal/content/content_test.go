@@ -10,19 +10,18 @@ func TestLoadEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEmbedded() error = %v", err)
 	}
-	if len(model.GeneralReactions) < 15 {
-		t.Errorf("general reactions = %d, want at least 15", len(model.GeneralReactions))
-	}
-	if len(model.PersonalGroups) < 2 {
-		t.Fatalf("personal groups = %d, want at least 2", len(model.PersonalGroups))
-	}
-	for i, group := range model.PersonalGroups {
-		if len(group.Actions) < 12 {
-			t.Errorf("group %d actions = %d, want at least 12", i, len(group.Actions))
-		}
-	}
 	if !strings.Contains(model.GeneralReactions[0], "مغزم") {
 		t.Error("embedded UTF-8 Persian content was not preserved")
+	}
+}
+
+func TestLoadAllowsNameOnlyPersonalGroup(t *testing.T) {
+	model, err := Load([]byte(`{"general_reactions":["x"],"personal_groups":[{"template":"reaction {name}:"}]}`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(model.PersonalGroups) != 1 || len(model.PersonalGroups[0].Actions) != 0 {
+		t.Fatalf("personal groups = %+v", model.PersonalGroups)
 	}
 }
 

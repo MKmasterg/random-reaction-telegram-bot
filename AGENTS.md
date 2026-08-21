@@ -26,14 +26,15 @@ Keep handler tests network-free. Test Redis scripts against a real isolated Redi
 
 ## Content schema
 
-`internal/content/reactions.json` is UTF-8 and embedded into the binary. It requires nonempty `general_reactions`, nonempty `personal_groups`, `{name}` and `{action}` in every template, and nonempty actions. Keep content playful without slurs, protected-class targeting, explicit sexual material, or hostile personal attacks.
+`internal/content/reactions.json` is UTF-8 and embedded into the binary. It requires nonempty `general_reactions`, nonempty `personal_groups`, and `{name}` in every personal template. `{action}` is optional; templates that use it require nonempty actions, while name-only templates omit `actions`. Keep content playful without slurs, protected-class targeting, explicit sexual material, or hostile personal attacks.
 
 ## Behavior
 
 - `/reaction`: general reaction.
 - `/personal`: personalized reaction.
+- Whole-word `reaction` or `واکنش` in a group: personalized reaction.
 - `/start` and `/help`: usage and privacy explanation.
-- Commands bypass Redis, probability, and cooldown.
+- Commands and keyword triggers bypass Redis, probability, and cooldown.
 - Automatic replies apply only to ordinary group and supergroup text messages.
 - Use plain Telegram text without a parse mode.
 

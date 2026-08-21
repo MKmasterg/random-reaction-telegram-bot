@@ -35,12 +35,12 @@ func (g *Generator) General() string {
 
 func (g *Generator) Personal(name string) string {
 	group := g.content.PersonalGroups[g.random.IntN(len(g.content.PersonalGroups))]
-	action := group.Actions[g.random.IntN(len(group.Actions))]
-	replacer := strings.NewReplacer(
-		"{name}", SanitizeName(name),
-		"{action}", action,
-	)
-	return replacer.Replace(group.Template)
+	result := strings.ReplaceAll(group.Template, "{name}", SanitizeName(name))
+	if strings.Contains(result, "{action}") {
+		action := group.Actions[g.random.IntN(len(group.Actions))]
+		result = strings.ReplaceAll(result, "{action}", action)
+	}
+	return result
 }
 
 // DisplayName chooses Telegram identity fields in a predictable order.
