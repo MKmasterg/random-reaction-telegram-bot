@@ -6,8 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/MKmasterg/random-reaction-telegram-bot/internal/application"
-	"github.com/MKmasterg/random-reaction-telegram-bot/internal/config"
+	"github.com/MKmasterg/random-reaction-telegram-bot/functions"
 )
 
 var (
@@ -19,11 +18,7 @@ var (
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	initOnce.Do(func() {
-		var cfg config.Config
-		cfg, initErr = config.FromFunctionLookup(os.LookupEnv)
-		if initErr == nil {
-			endpoint, initErr = application.NewFunctionHandler(cfg, logger)
-		}
+		endpoint, initErr = functions.NewWebhookHandler(os.LookupEnv, logger)
 	})
 	if initErr != nil {
 		logger.Error("initialize webhook function", "error", initErr)

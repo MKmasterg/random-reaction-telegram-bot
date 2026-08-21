@@ -16,10 +16,10 @@ redis-up:
 	docker compose up -d redis
 
 fmt:
-	gofmt -w api cmd internal
+	gofmt -w api cmd functions internal
 
 fmt-check:
-	test -z "$$(gofmt -l api cmd internal)"
+	test -z "$$(gofmt -l api cmd functions internal)"
 
 vet:
 	go vet ./...

@@ -9,6 +9,7 @@ Function adapters belong under `api`. Keep them thin, keep domain packages and R
 ## Package boundaries
 
 - `api`: thin event-driven HTTP function adapters.
+- `functions`: public bridge used by generated function wrappers; it may compose internal packages but should contain no bot policy.
 - `cmd/bot`: signals and standalone transport selection.
 - `cmd/register-webhook`: readiness-gated Telegram webhook registration.
 - `internal/application`: shared dependency wiring for every runtime.
