@@ -23,8 +23,12 @@ type webhookBot interface {
 
 // RunPolling removes any existing webhook before entering long polling.
 func RunPolling(ctx context.Context, bot pollingBot, logger *slog.Logger) error {
-	if _, err := bot.DeleteWebhook(ctx, &tgbot.DeleteWebhookParams{}); err != nil {
+	ok, err := bot.DeleteWebhook(ctx, &tgbot.DeleteWebhookParams{})
+	if err != nil {
 		return fmt.Errorf("delete existing webhook: %w", err)
+	}
+	if !ok {
+		return errors.New("Telegram rejected webhook deletion")
 	}
 	logger.Info("starting bot transport", "mode", "polling")
 	bot.Start(ctx)
@@ -41,13 +45,18 @@ func runWebhook(ctx context.Context, bot webhookBot, handler http.Handler, addre
 	if err != nil {
 		return fmt.Errorf("listen for webhook: %w", err)
 	}
-	if _, err := bot.SetWebhook(ctx, &tgbot.SetWebhookParams{
+	ok, err := bot.SetWebhook(ctx, &tgbot.SetWebhookParams{
 		URL:            publicURL,
 		AllowedUpdates: []string{"message"},
 		SecretToken:    secret,
-	}); err != nil {
+	})
+	if err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("register webhook: %w", err)
+	}
+	if !ok {
+		_ = listener.Close()
+		return errors.New("Telegram rejected webhook registration")
 	}
 
 	server := &http.Server{

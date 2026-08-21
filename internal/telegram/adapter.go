@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"time"
 
 	tgbot "github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -23,7 +24,9 @@ func NewDelivery(api messageAPI) *Delivery {
 }
 
 func (d *Delivery) SendReply(ctx context.Context, chatID int64, replyToMessageID int, text string) error {
-	_, err := d.api.SendMessage(ctx, &tgbot.SendMessageParams{
+	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := d.api.SendMessage(sendCtx, &tgbot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 		ReplyParameters: &models.ReplyParameters{

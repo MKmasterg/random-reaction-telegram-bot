@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,33 +29,48 @@ type FloatRandom interface {
 	Float64() float64
 }
 
+type CooldownStore interface {
+	TryStart(ctx context.Context, updateID, chatID int64, now time.Time) (CooldownReservation, bool, error)
+}
+
+type CooldownReservation interface {
+	Finish(ctx context.Context, now time.Time, success bool) error
+}
+
 type Options struct {
-	Probability float64
-	Random      FloatRandom
-	Now         func() time.Time
-	Logger      *slog.Logger
+	Probability      float64
+	ProbabilityScore func(updateID int64) float64
+	Random           FloatRandom
+	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
 // Handler applies command, probability, and cooldown policy to domain updates.
 type Handler struct {
-	sender      Sender
-	generator   ReactionGenerator
-	cooldowns   *Cooldowns
-	probability float64
-	random      FloatRandom
-	now         func() time.Time
-	logger      *slog.Logger
+	sender           Sender
+	generator        ReactionGenerator
+	cooldowns        CooldownStore
+	probability      float64
+	probabilityScore func(updateID int64) float64
+	random           FloatRandom
+	now              func() time.Time
+	logger           *slog.Logger
 }
 
-func New(sender Sender, generator ReactionGenerator, cooldowns *Cooldowns, options Options) *Handler {
+func New(sender Sender, generator ReactionGenerator, cooldowns CooldownStore, options Options) *Handler {
+	probabilityScore := options.ProbabilityScore
+	if probabilityScore == nil {
+		probabilityScore = deterministicProbabilityScore
+	}
 	return &Handler{
-		sender:      sender,
-		generator:   generator,
-		cooldowns:   cooldowns,
-		probability: options.Probability,
-		random:      options.Random,
-		now:         options.Now,
-		logger:      options.Logger,
+		sender:           sender,
+		generator:        generator,
+		cooldowns:        cooldowns,
+		probability:      options.Probability,
+		probabilityScore: probabilityScore,
+		random:           options.Random,
+		now:              options.Now,
+		logger:           options.Logger,
 	}
 }
 
@@ -110,12 +128,17 @@ func (h *Handler) Handle(ctx context.Context, update domain.Update) error {
 		return nil
 	}
 
-	if h.random.Float64() >= h.probability {
+	if h.probabilityScore(update.ID) >= h.probability {
 		h.logDecision(update.ID, message.ChatID, "automatic_probability_skip")
 		return nil
 	}
 	startedAt := h.now()
-	if !h.cooldowns.TryStart(message.ChatID, startedAt) {
+	reservation, started, err := h.cooldowns.TryStart(ctx, update.ID, message.ChatID, startedAt)
+	if err != nil {
+		h.logger.Error("reserve automatic cooldown", "update_id", update.ID, "chat_id", message.ChatID, "error", err)
+		return fmt.Errorf("reserve automatic cooldown: %w", err)
+	}
+	if !started {
 		h.logDecision(update.ID, message.ChatID, "automatic_cooldown_skip")
 		return nil
 	}
@@ -126,14 +149,32 @@ func (h *Handler) Handle(ctx context.Context, update domain.Update) error {
 	} else {
 		text = h.generator.Personal(reaction.DisplayName(message.From))
 	}
-	err := h.sender.SendReply(ctx, message.ChatID, message.ID, text)
-	h.cooldowns.Finish(message.ChatID, h.now(), err == nil)
-	if err != nil {
-		h.logger.Error("send automatic reaction", "update_id", update.ID, "chat_id", message.ChatID, "error", err)
-		return fmt.Errorf("send automatic reaction: %w", err)
+	sendErr := h.sender.SendReply(ctx, message.ChatID, message.ID, text)
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	finishErr := reservation.Finish(finishCtx, h.now(), sendErr == nil)
+	cancel()
+	if sendErr != nil {
+		h.logger.Error("send automatic reaction", "update_id", update.ID, "chat_id", message.ChatID, "error", sendErr)
+		if finishErr != nil {
+			return errors.Join(fmt.Errorf("send automatic reaction: %w", sendErr), fmt.Errorf("release automatic cooldown: %w", finishErr))
+		}
+		return fmt.Errorf("send automatic reaction: %w", sendErr)
+	}
+	if finishErr != nil {
+		h.logger.Error("commit automatic cooldown", "update_id", update.ID, "chat_id", message.ChatID, "error", finishErr)
+		return fmt.Errorf("commit automatic cooldown: %w", finishErr)
 	}
 	h.logDecision(update.ID, message.ChatID, "automatic_sent")
 	return nil
+}
+
+func deterministicProbabilityScore(updateID int64) float64 {
+	var input [8]byte
+	binary.BigEndian.PutUint64(input[:], uint64(updateID))
+	digest := sha256.Sum256(input[:])
+	const precision = 53
+	value := binary.BigEndian.Uint64(digest[:8]) >> (64 - precision)
+	return float64(value) / (1 << precision)
 }
 
 func (h *Handler) sendExplicit(ctx context.Context, updateID int64, message *domain.Message, text, decision string) error {
